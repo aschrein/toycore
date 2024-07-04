@@ -1,0 +1,14 @@
+
+# https://scikit-build.readthedocs.io/en/latest/usage.html
+# https://github.com/pybind/scikit_build_example/blob/master/pyproject.toml
+[build-system]
+requires = [
+    "setuptools>=42",
+]
+
+[project]
+name = "toycore"
+version = "0.0.0"
+authors = [
+    {name = "Anton Schreiner", email = "antonschrein@gmail.com"},
+]
