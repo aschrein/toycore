@@ -7,6 +7,10 @@ requires = [
 ]
 
 [project]
+dependencies = [
+    "yowasp-yosys",
+    "yowasp-nextpnr-ice40",
+]
 name = "toycore"
 version = "0.0.0"
 authors = [

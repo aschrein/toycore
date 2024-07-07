@@ -1,0 +1,11 @@
+# Read the Verilog file
+read_verilog ../design.v
+
+# Synthesize the design
+synth -top counter_4bit
+
+# Generate a netlist
+write_verilog synth_output.v
+
+# Generate a graphviz dot file for visualization
+show -format dot -prefix logic_diagram

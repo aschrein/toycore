@@ -41,7 +41,7 @@ Module(Counter4Bit) {{
     
     Logic(clock_trigger) {{
         if(enable) {{
-            Registers.count <-  prev(Registers).count + 1;
+            Registers.count <- prev(Registers).count + 1;
         }} else {{
             Registers.count <- 0b0000;
         }}
@@ -51,7 +51,6 @@ Module(Counter4Bit) {{
 """
 
 modules = parse_modules_from_text(design_text)
-# print(modules)
 
 for name, trigger in modules[0].triggers.items():
     print(f"Trigger {name} condition: {trigger.condition}")

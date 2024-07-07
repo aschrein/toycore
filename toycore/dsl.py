@@ -29,10 +29,10 @@ class ConsoleColor:
 
 @dataclass
 class Token:
-    type: TokenType
-    value: any
-    line: int
-    col: int
+    type    : TokenType
+    value   : any
+    line    : int
+    col     : int
 
 
     def is_float(self):
@@ -47,7 +47,7 @@ class TokenStream:
         General purpose token stream for tokenizing a string for a C like language.
     """
 
-    def __init__(self, string_or_tokenlist, _file_path=None, _build_ast=None, _lines=None):
+    def __init__(self, string_or_tokenlist, _file_path=None, _build_ast=None, _parent=None):
         """
             _build_ast is when we want to build an AST from the tokens inside the try/catch block
         """
@@ -56,12 +56,17 @@ class TokenStream:
             """
                 If a list of tokens is provided, then we can skip tokenizing the string
             """
-            self.tokens = string_or_tokenlist
-            self.string = None
-            self.lines  = _lines
-            self.pos    = 0
-            self.file_path = None
-            self.ast = None
+            self.tokens         = string_or_tokenlist
+            self.string         = None
+            self.lines          = None
+            self.pos            = 0
+            self.file_path      = None
+            self.ast            = None
+            if _parent:
+                self.string     = _parent.string
+                self.file_path  = _parent.file_path
+                self.lines      = _parent.lines
+
             return
         
         assert isinstance(string_or_tokenlist, str), "Expected string or list of tokens"
@@ -82,6 +87,15 @@ class TokenStream:
         self.lines      = string.split('\n')
         self.pos        = 0
         self.file_path  = _file_path if _file_path else "NONE"
+        self.lines_scan = []
+        if 1: # compute lines offset scan
+            offset = 0
+            for line in self.lines:
+                self.lines_scan.append(offset)
+                offset += len(line)
+
+        def get_col(line, idx):
+            return idx - self.lines_scan[line]
 
         line    = 0
         col     = 0
@@ -116,6 +130,7 @@ class TokenStream:
                     _flush_token()
                 elif c == ' ' or c == '\t':
                     _flush_token()
+                    cur_col += 1
                 # skip comments
                 elif c == '/' and nc == '/':
                     _flush_token()
@@ -123,14 +138,23 @@ class TokenStream:
                     while nc and nc != '\n':
                         idx += 1
                         nc = string[idx + 1] if idx + 1 < len(string) else None
+                        line += 1
+                        cur_col = 0
                 
                 # tripple quoted strings
                 elif (c == '"' and nc == '"' and nnc == '"') or (c == "'" and nc == "'" and nnc == "'"):
                     _flush_token()
                     cur_str = ""
                     idx += 2
+                    cur_col += 2
+                    col = cur_col
                     nc = string[idx + 1] if idx + 1 < len(string) else None
                     while nc and nnc and nnnc and (nc != c or nnc != c or nnnc != c):
+                        if nc == '\n':
+                            line += 1
+                            cur_col = 0
+                        else:
+                            cur_col += 1
                         cur_str += nc
                         idx     += 1
                         nc      = string[idx + 1] if idx + 1 < len(string) else None
@@ -144,9 +168,13 @@ class TokenStream:
                 elif c == '"' or c == "'":
                     _flush_token()
                     cur_str = ""
+                    col = cur_col
                     while nc and nc != c:
                         if nc == '\n':
                             line += 1
+                            cur_col = 0
+                        else:
+                            cur_col += 1
                         cur_str += nc
                         idx     += 1
                         nc      = string[idx + 1] if idx + 1 < len(string) else None
@@ -163,10 +191,12 @@ class TokenStream:
                                 :
                     if len(cur_str) == 0:
                         _flush_token()
+                        col = cur_col
                         cur_str += c
                         if nc in ['x', 'X', 'b', 'B']:
                             cur_str += nc
                             idx += 1
+                            cur_col += 1
                             nc = string[idx + 1] if idx + 1 < len(string) else None
 
                         is_science = False
@@ -179,6 +209,7 @@ class TokenStream:
 
                             cur_str += nc
                             idx += 1
+                            cur_col += 1
                             nc = string[idx + 1] if idx + 1 < len(string) else None
                         # print(f"parsed number {cur_str} at line {line}, col {col}")
                         self.tokens.append(Token(TokenType.NUMBER, cur_str.lower(), line, col))
@@ -196,31 +227,35 @@ class TokenStream:
                                  ',', '.', '@', '#', '$', '`', '\\', '/',
                                  '(', ')', '{', '}', '[', ']']:
                     _flush_token()
-
+                    col = cur_col
                     # check if operator is a double operator
                     if nc and dop in ['==', '!=', '>=', '<=', '&&', '||', '++',
                                    '--', '+=', '-=', '*=', '/=', '%=', '<<',
                                    '>>', '<-', '->', '<=', '=>', '::', "or", "OR"]:
                         self.tokens.append(Token(TokenType.OPERATOR, dop, line, col))
+                        cur_col += 1
                         idx += 1
                     # check if operator is a tripple operator
                     elif nnc and trip in ['and', 'AND', 'xor', 'XOR']:
                         self.tokens.append(Token(TokenType.OPERATOR, trip, line, col))
+                        cur_col += 2
                         idx += 2
                     
                     # check if character is a single operator
                     elif c in ['+', '-', '*', '/', '%', '>', '<', '=', '!',
                                '&', '|', '^', '~', '?', ':', ';', ',', '.',
                                '@', '#', '$']:
+                        cur_col += 1
                         self.tokens.append(Token(TokenType.OPERATOR, c, line, col))
                     else:
+                        cur_col += 1
                         self.tokens.append(Token(TokenType.SPECIAL, c, line, col))
                 
                 else:
                     if len(cur_str) == 0:
                         col = cur_col - 1
                     cur_str += c
-                cur_col += 1
+                    cur_col += 1
                 idx += 1
 
             _flush_token()
@@ -346,6 +381,15 @@ class TokenStream:
         """
         self.pos += 1
 
+    def emit_debug_position(self):
+        """
+            Print the current token position
+        """
+        print(f"********************************")
+        print(f"{self.get_line(self.peek().line)}")
+        # put cursor at col
+        print(f"{'-' * self.peek().col}^")
+
 # Lets get some basic arithmetic expression parsing
 
 class ASTNode:
@@ -363,7 +407,7 @@ class ExprType(Enum):
     LITERAL     = 0
     UNARY       = 1
     BINARY      = 2
-    PARANTHESIS = 3
+    PARENTHESIS = 3
     CALL        = 4
 
 
@@ -382,19 +426,23 @@ class Expr:
     def right(self): return self.args[1]
 
     def __repr__(self) -> str:
+        return self.pretty_print()
+    
+    def pretty_print(self, indent=0):
         if self.type == ExprType.LITERAL:
-            return f"{self.value}"
+            return f"{' ' * indent }{self.value}"
         elif self.type == ExprType.UNARY:
-            return f"{self.value} ({self.args[0]})"
+            return f"{' ' * indent }{self.value}\n({self.args[0].pretty_print(indent+2)})"
         elif self.type == ExprType.BINARY:
-            return f"""Binary({self.value})
-(({self.args[0]})
-({self.args[1]}))"""
-        elif self.type == ExprType.PARANTHESIS:
-            return f"({self.args[0]})"
+            return f"""{' ' * indent }{self.value}
+{self.args[0].pretty_print(indent + 2)}
+{self.args[1].pretty_print(indent + 2)}"""
+        elif self.type == ExprType.PARENTHESIS:
+            return f"{' ' * indent }()\n{self.args[0].pretty_print(indent+2)}"
         elif self.type == ExprType.CALL:
-            return f"{self.value}({self.args})"
-        return f"Expr({self.type}, {self.token}, {self.args})"
+            return f"{' ' * indent } call {self.value}\n{self.args[0].pretty_print(indent+2)}"
+        else:
+            return f"{' ' * indent }{self.value}"
 
 def recursive_parse_expression(tk: TokenStream):
     """
@@ -422,33 +470,39 @@ def recursive_parse_expression(tk: TokenStream):
                                 ]
 
     """
+    tk.emit_debug_position()
+
     c = tk.next()
     if not c: return None
+    lhs = Expr(ExprType.LITERAL, c, [])
     # print (f"parsing token {c}")
     if c.value == '(':
-        p = Expr(ExprType.PARANTHESIS, c, [recursive_parse_expression(tk)])
-        # print(f"PARANTHESIS {p}")
+        lhs = Expr(ExprType.PARENTHESIS, c, [recursive_parse_expression(tk)])
+        # print(f"PARENTHESIS {p}")
         assert tk.consume(')'), f"Expected ')' but got {tk.peek().value}"
-        return p
 
     n = tk.peek()
     # print (f"peeking token {n}")
-    if n is None:
-        return Expr(ExprType.LITERAL, c, [])
-    if n.value == '(':
+    if n is None: return lhs
+    elif n.value == ')': return lhs
+    elif n.value == '(':
+        assert lhs.type == ExprType.LITERAL, f"Expected LITERAL but got {lhs}"
         tk.next()
-        p = Expr(ExprType.CALL, c, [recursive_parse_expression(tk)])
+        lhs = Expr(ExprType.CALL, c, [recursive_parse_expression(tk)])
         # print(f"CALL {p}")
         assert tk.consume(')'), f"Expected ')' but got {tk.peek().value}"
-        return p
+        n = tk.peek()
+    
+    if n is None: return lhs
+    elif n.value == ')': return lhs
     elif n.type == TokenType.OPERATOR:
         tk.next()
-        op = Expr(ExprType.BINARY, n, [Expr(ExprType.LITERAL, c, []), recursive_parse_expression(tk)])
+        op = Expr(ExprType.BINARY, n, [lhs, recursive_parse_expression(tk)])
         # print (f"binary {op}")
         return op
 
     else:
-        return Expr(ExprType.LITERAL, c, [])
+        assert False, f"Unexpected token {n}"
 
 def _recursive_parse_expression(tk: TokenStream):
     c = tk.next()
@@ -457,8 +511,8 @@ def _recursive_parse_expression(tk: TokenStream):
         tk.move_back()
         return None
     if c.value == '(':
-        p = Expr(ExprType.PARANTHESIS, c, [recursive_parse_expression(tk)])
-        print(f"PARANTHESIS {p}")
+        p = Expr(ExprType.PARENTHESIS, c, [recursive_parse_expression(tk)])
+        print(f"PARENTHESIS {p}")
         assert tk.consume(')'), f"Expected ')' but got {tk.peek().value}"
         return p
 
@@ -533,8 +587,8 @@ class Trigger:
                     if ts.consume("condition"):
                         assert ts.consume("=")
                         l = ts.get_list_until(";")
-                        print(f"condition: {l}")
-                        self.condition = recursive_parse_expression(TokenStream(l))
+                        # print(f"condition: {l}")
+                        self.condition = recursive_parse_expression(TokenStream(l, _parent=ts))
                     else:
                         assert False, f"Unexpected token {ts.peek()}"
                 else:
