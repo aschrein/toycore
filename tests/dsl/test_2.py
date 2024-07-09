@@ -51,6 +51,31 @@
 
 """
 
+class INode: # Something that is a node in physical design for graphviz
+    def __init__(self):
+        pass
+
+def get_wire_source_gate(n):
+    if hasattr(n, "parent") and isinstance(n.parent, INode):
+        return n.parent
+
+    for i in n.inputs:
+        l = get_wire_source_gate(i)
+        if l:
+            return l
+            
+    return None
+
+def get_wire_end_gate(n):
+    if hasattr(n, "parent") and isinstance(n.parent, INode):
+        return n.parent
+
+    for i in n.outputs:   
+        l = get_wire_end_gate(i)
+        if l:
+            return  l
+    return None
+
 class DesignContext:
     """
         Design context is a container for all the elements of the design
@@ -67,6 +92,7 @@ class DesignContext:
         self.slots          = []
         self.logic_elements = []
         self.flip_flops     = []
+        self.modules        = []
 
     def add_flip_flop(self, flip_flop):
         self.flip_flops.append(flip_flop)
@@ -85,6 +111,11 @@ class DesignContext:
         self.slots.append(slot)
         self.logic_elements.append(slot)
         return slot
+
+    def add_module(self, module):
+        self.modules.append(module)
+        # self.logic_elements.append(module)
+        return module
 
     def update(self):
         # Rising edge of the global clock triggers the flip-flops to update their state
@@ -112,6 +143,60 @@ class DesignContext:
     def clean():
         DesignContext.current = DesignContext()
 
+    # dump dot graph
+    @staticmethod
+    def dump_dot():
+        ctx = DesignContext.get_current()
+        str = ""
+        str += "digraph G {\n"
+        
+        # for each gate make a node
+        for gate in ctx.gates:
+            str += f"    _{id(gate)} [label=\"{gate.op}\"];\n"
+
+        # make a node for each flip-flop
+        # group flip flops by group name
+        groups = {}
+        for flip_flop in ctx.flip_flops:
+            if flip_flop.group not in groups:
+                groups[flip_flop.group] = []
+            groups[flip_flop.group].append(flip_flop)
+
+        for group, flip_flops in groups.items():
+            str += f"""subgraph cluster_{group} {{
+                
+                style=filled;
+		        color=lightgrey;
+		        label = "{group}";
+
+                """
+            for flip_flop in flip_flops:
+                str += f"    _{id(flip_flop)} [label=\"FF\"];\n"
+            str += f"}}\n"
+
+        # make nodes for each module
+        # for module in ctx.modules:
+        #     str += f"    {id(module)} [label=\"{type(module).__name__}\"];\n"
+
+        for wire in ctx.wires:
+            o = get_wire_source_gate(wire)
+            e = get_wire_end_gate(wire)
+            # if o in ctx.modules:
+                
+            str += f"    _{id(o)} -> _{id(e)};\n"
+
+
+
+        # for slot in ctx.slots:
+        #     for wire in slot.inputs:
+        #         str += f"    {id(wire.origin)} -> {id(slot)};\n"
+        #     for wire in slot.outputs:
+        #         str += f"    {id(slot)} -> {id(wire.end)};\n"
+
+        str += "}\n"
+
+        return str
+    
     # Get current context
     @staticmethod
     def get_current():
@@ -152,7 +237,7 @@ class Wire1Bit:
     def update(self):
         self.end.value = self.origin.value
 
-class UnaryGate1Bit:
+class UnaryGate1Bit(INode):
     def __init__(self, a : Slot1Bit, op):
         self.in_0       = Slot1Bit(self)
         self.out        = Slot1Bit(self)
@@ -172,7 +257,7 @@ class UnaryGate1Bit:
         else:
             raise ValueError(f"Unknown operation: {self.op}")
 
-class BinaryGate1Bit:
+class BinaryGate1Bit(INode):
     def __init__(self, a : Slot1Bit, b : Slot1Bit, op):
         self.in_0       = Slot1Bit(self)
         self.in_1       = Slot1Bit(self)
@@ -202,11 +287,12 @@ class BinaryGate1Bit:
         else:
             raise ValueError(f"Unknown operation: {self.op}")
         
-class FlipFlop1Bit:
-    def __init__(self):
+class FlipFlop1Bit(INode):
+    def __init__(self, group="default"):
         self.d      = Slot1Bit(self)
         self.q      = Slot1Bit(self)
         self.q_bar  = Slot1Bit(self)
+        self.group  = group # debugging
         DesignContext.get_current().add_flip_flop(self)
 
     def update(self):
@@ -220,6 +306,8 @@ class FlipFlop1Bit:
 
 class TwosComplementInverterNBit:
     def __init__(self, width):
+        DesignContext.get_current().add_module(self)
+
         self.width = width
         self.in_0  = [Slot1Bit(self) for _ in range(width)]
         self.out   = [None for _ in range(width)] # we're gonna fill this later
@@ -254,6 +342,8 @@ class TwosComplementInverterNBit:
 
 class Multiplier_1_58_Bit:
     def __init__(self):
+        DesignContext.get_current().add_module(self)
+
         self.a    = [Slot1Bit(self) for _ in range(2)]
         self.b    = [Slot1Bit(self) for _ in range(2)]
         self.out  = [None for _ in range(2)] # we're gonna fill this later
@@ -293,6 +383,8 @@ class AdderNBit:
         N-bit adder
     """
     def __init__(self, width):
+        DesignContext.get_current().add_module(self)
+
         self.width = width
         self.in_0  = [Slot1Bit(self) for _ in range(width)]
         self.in_1  = [Slot1Bit(self) for _ in range(width)]
@@ -454,11 +546,12 @@ def test_flip_flop_2():
     for i in range(16):
         DesignContext.clean()
         
-        width = 16
-        a = [FlipFlop1Bit() for _ in range(16)]
-        b = [FlipFlop1Bit() for _ in range(16)]
-        c = [FlipFlop1Bit() for _ in range(16)]
-        d = [FlipFlop1Bit() for _ in range(16)]
+        width = 8
+        a = [FlipFlop1Bit("a") for _ in range(width)]
+        b = [FlipFlop1Bit("b") for _ in range(width)]
+        c = [FlipFlop1Bit("c") for _ in range(width)]
+        d = [FlipFlop1Bit("d") for _ in range(width)]
+        res = [FlipFlop1Bit("res") for _ in range(width)]
         _a = random.randint(0, (1 << width) - 1)
         _b = random.randint(0, (1 << width) - 1)
         _d = random.randint(0, (1 << width) - 1)
@@ -476,6 +569,7 @@ def test_flip_flop_2():
             Wire1Bit(adder_0.out[i],    c[i].d)
             Wire1Bit(c[i].q,            adder_1.in_0[i])
             Wire1Bit(d[i].q,            adder_1.in_1[i])
+            Wire1Bit(adder_1.out[i],    res[i].d)
 
         DesignContext.get_current().update() # trigger inputs, a, b to be loaded into flip-flops
         gt_a_plus_b = (_a + _b) & ((1 << width) - 1)
@@ -495,6 +589,10 @@ def test_flip_flop_2():
         assert gather_outputs_into_a_number(adder_0.out) == gt_a_plus_b        
         assert gather_outputs_into_a_number(adder_1.out) == gt_c_plus_d, f"Expected {gt_c_plus_d}, got {gather_outputs_into_a_number(adder_1.out)}"
         # print(f"{gather_outputs_into_a_number(adder_1.out)} == {gt_c_plus_d}")
+
+        # dump dot
+        with open(".tmp/test.dot", "w") as f:
+            f.write(DesignContext.dump_dot())        
 
 if __name__ == "__main__":
 
